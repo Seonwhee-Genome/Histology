@@ -138,14 +138,14 @@ if __name__=="__main__":
     
     # DEFINE OPTIMIZER
     with tf.name_scope("ADAGRAD"):
-    batch = tf.Variable(0)
-    learning_rate = tf.train.exponential_decay(
-        1e-4,               # LEARNING_RATE
+        batch = tf.Variable(0)
+        learning_rate = tf.train.exponential_decay(
+        1e-3,               # LEARNING_RATE
         batch * batch_size, # GLOBAL_STEP
         train_size,         # DECAY_STEP
-        0.95,               # DECAY_RATE
+        4e-4,               # DECAY_RATE
         staircase=True)     # LR = LEARNING_RATE*DECAY_RATE^(GLOBAL_STEP/DECAY_STEP)
-    train_step = tf.train.AdagradOptimizer(learning_rate).minimize(loss,global_step=batch)
+        train_step = tf.train.AdagradOptimizer(learning_rate).minimize(loss,global_step=batch)
     
     
     # SUMMARIES For TensorBoard
