@@ -6,7 +6,7 @@ from custom_models import VGG19
 from ImageLoader import *
 from functools import reduce
 
-VGG_MEAN = [103.939, 116.779, 123.68]
+VGG_MEAN = [103.939, 116.779, 123.68, 102.32]
 HPF_risks = []
 
 class COX_model_with_VGG(object, VGG19):
@@ -16,24 +16,27 @@ class COX_model_with_VGG(object, VGG19):
         load variable from npy to build the VGG
 
         :param rgb: rgb image [batch, height, width, 3] values scaled [0, 1]
+        :param rgba: rgba image [batch, height, width, 4]
         :param train_mode: a bool tensor, usually a placeholder: if True, dropout will be turned on
         """
 
         rgb_scaled = rgb * 255.0
 
         # Convert RGB to BGR
-        red, green, blue = tf.split(axis=3, num_or_size_splits=3, value=rgb_scaled)
+        red, green, blue, alpha = tf.split(axis=3, num_or_size_splits=4, value=rgb_scaled)
         assert red.get_shape().as_list()[1:] == [256, 256, 1]
         assert green.get_shape().as_list()[1:] == [256, 256, 1]
         assert blue.get_shape().as_list()[1:] == [256, 256, 1]
-        bgr = tf.concat(axis=3, values=[
+        assert alpha.get_shape().as_list()[1:] == [256, 256, 1]
+        bgr = tf.concat(axis=4, values=[
             blue - VGG_MEAN[0],
             green - VGG_MEAN[1],
             red - VGG_MEAN[2],
+            alpha - VGG_MEAN[3]
         ])
-        assert bgr.get_shape().as_list()[1:] == [256, 256, 3]
+        assert bgr.get_shape().as_list()[1:] == [256, 256, 4]
 
-        self.conv1_1 = self.conv_layer(bgr, 3, 64, "conv1_1")
+        self.conv1_1 = self.conv_layer(bgr, 4, 64, "conv1_1")
         self.conv1_2 = self.conv_layer(self.conv1_1, 64, 64, "conv1_2")
         self.pool1 = self.max_pool(self.conv1_2, 'pool1')
 
@@ -88,53 +91,39 @@ class COX_model_with_VGG(object, VGG19):
 
             return Risk
     
-    def get_Neg_Likelihood(self, HPF, mode):
-        
-        risk = self.build(HPF) 
-        loglikelihood = tf.Variable(tf.zeros([1]), tf.float32)
-        for i in range(14):
-            loglikelihood = loglikelihood + (tf.gather_nd(risk, [i, 0]) - tf.log(tf.reduce_sum(tf.exp(risk), 0)))
-        loglikelihood = -1.0*loglikelihood
-        return loglikelihood
+    
 
 if __name__=="__main__":
-    # IMAGE SELECTION
-    batch_input = []
-    num_images = 14
-    seed_num = 5
-    count = 1
-    
-    while len(batch_input) < num_images:
-        batch = select_batch_images(seed_num*3, num_images)
-        batch_input = batch + batch_input
-        batch_input = list(set(batch_input))
-        del batch
-        print(len(batch_input))
-        print(batch_input)
-        count = count + 1
-        if count == 19:
-            break
-    
-    resized_img1 = load_image(batch_input[0], 1)
-    resized_img1 = resized_img1.reshape((1, 256, 256, 4))
-    for img_num in range(1,len(batch_input)):
-        resized_img = load_image(batch_input[img_num], img_num)
-        resized_img = resized_img.reshape((1, 256, 256, 4))
-        resized_img1 = np.concatenate((resized_img1, resized_img), 0)
-    ######################################################################
-    SCNN = COX_model_with_VGG()
-    HPF = tf.placeholder(tf.float32, shape=(14, 256, 256, 4))
+    input_Tensor, SubSets = random_image_tensor()
     is_training = tf.placeholder(tf.bool, name='MODE')
+    x = tf.placeholder(tf.float32, shape=(14, 256, 256, 4))
+    y = []
+    for i in range(0,13):
+        individual_x = tf.slice(x, [i, 0, 0, 0], [1, 256, 256, 4])
+        individual_y = tf.Variable(tf.zeros([1]), tf.float32)
+        print("x = ", x.shape)
+        print("sliced x = ", individual_x.shape)
+        
+    
+    individual_y = COX_model_with_VGG()
+    y.append(individual_y)
+    
     
     # CONVOLUTIONAL NEURAL NETWORK MODEL
     # DEFINE LOSS
     with tf.name_scope("LOSS"):
-        loss = SCNN.get_Neg_Likelihood(HPF, is_training)
+        likelihood = tf.Variable(tf.zeros([1]), tf.float32)
+        for i in range(0,13):
+            SetofAtRisk = tf.Variable(tf.zeros([1]), tf.float32)
+            if len(SubSets[i]) > 0:
+                for j in SubSets[i]:
+                    SetofAtRisk = tf.add(SetofAtRisk, tf.exp(fourteenD[j]))
+                likelihood = likelihood + y[i] - tf.log(SetofAtRisk)
+            else:
+                continue
+        likelihood = -1.0*likelihood
     
-    # DEFINE ACCURACY
-    with tf.name_scope("ACC"):
-        correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
     
     # DEFINE OPTIMIZER
     with tf.name_scope("ADAGRAD"):
@@ -145,19 +134,18 @@ if __name__=="__main__":
         train_size,         # DECAY_STEP
         4e-4,               # DECAY_RATE
         staircase=True)     # LR = LEARNING_RATE*DECAY_RATE^(GLOBAL_STEP/DECAY_STEP)
-        train_step = tf.train.AdagradOptimizer(learning_rate).minimize(loss,global_step=batch)
+        train_step = tf.train.AdagradOptimizer(learning_rate).minimize(likelihood,global_step=batch)
     
     
     # SUMMARIES For TensorBoard
     saver = tf.train.Saver()
     tf.summary.scalar('learning_rate', learning_rate)
-    tf.summary.scalar('loss', loss)
-    tf.summary.scalar('acc', accuracy)
+    tf.summary.scalar('loss', loss)    
     merged_summary_op = tf.summary.merge_all()
     summary_writer = tf.summary.FileWriter(LOGS_DIRECTORY, graph=tf.get_default_graph())
     print ("MODEL DEFINED.")
     
     
     with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer(), feed_dict={is_training: True, HPF: resized_img1})
+        sess.run(tf.global_variables_initializer(), feed_dict={is_training: True, x: input_Tensor})
 
