@@ -103,10 +103,9 @@ if __name__=="__main__":
         individual_y = tf.Variable(tf.zeros([1]), tf.float32)
         print("x = ", x.shape)
         print("sliced x = ", individual_x.shape)
-        
-    
-    individual_y = COX_model_with_VGG()
-    y.append(individual_y)
+        SCNN = COX_model_with_VGG()
+        individual_y = SCNN.build(individual_x, is_training)
+        y.append(individual_y)
     
     
     # CONVOLUTIONAL NEURAL NETWORK MODEL
